@@ -1,0 +1,212 @@
+{{- $fullname := include "messenger.fullname" . -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $fullname }}-backend
+  labels:
+    {{- include "messenger.labels" . | nindent 4 }}
+data:
+  DB_URL: {{ include "messenger.dbUrl" . | quote }}
+  DB_USERNAME: {{ (ternary .Values.postgresql.username .Values.externalDatabase.username .Values.postgresql.enabled) | quote }}
+  DB_POOL_SIZE: {{ .Values.backend.dbPoolSize | quote }}
+  REDIS_HOST: {{ include "messenger.redisHost" . | quote }}
+  REDIS_PORT: {{ (ternary 6379 .Values.externalRedis.port .Values.redis.enabled) | quote }}
+  JWT_TTL_HOURS: {{ .Values.app.jwtTtlHours | quote }}
+  ADMIN_USERNAME: {{ .Values.app.adminUsername | quote }}
+  MAX_FILE_SIZE: {{ .Values.app.maxFileSize | quote }}
+  FILE_BLOCKED_EXTENSIONS: {{ .Values.app.blockedExtensions | quote }}
+  FILE_STORAGE_PATH: /data/files
+  WS_ALLOWED_ORIGINS: {{ printf "https://%s,http://%s" .Values.route.host .Values.route.host | quote }}
+  JAVA_OPTS: {{ .Values.backend.javaOpts | quote }}
+  TZ: {{ .Values.app.timezone | quote }}
+---
+{{- if not .Values.files.persistence.existingClaim }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $fullname }}-files
+  labels:
+    {{- include "messenger.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes:
+    - {{ .Values.files.persistence.accessMode }}
+  resources:
+    requests:
+      storage: {{ .Values.files.persistence.size }}
+  {{- with .Values.files.persistence.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+---
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-backend
+  labels:
+    {{- include "messenger.labels" . | nindent 4 }}
+    {{- include "messenger.selectorLabels" (dict "ctx" . "component" "backend") | nindent 4 }}
+spec:
+  {{- if not .Values.backend.autoscaling.enabled }}
+  replicas: {{ .Values.backend.replicas }}
+  {{- end }}
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      {{- include "messenger.selectorLabels" (dict "ctx" . "component" "backend") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "messenger.selectorLabels" (dict "ctx" . "component" "backend") | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+    spec:
+      {{- include "messenger.imagePullSecrets" . | nindent 6 }}
+      terminationGracePeriodSeconds: 45
+      containers:
+        - name: backend
+          image: {{ include "messenger.image" (dict "ctx" . "image" .Values.backend.image) }}
+          imagePullPolicy: {{ .Values.backend.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: {{ $fullname }}-backend
+          env:
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef: { name: {{ include "messenger.secretName" . }}, key: JWT_SECRET }
+            - name: ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: {{ include "messenger.secretName" . }}, key: ADMIN_PASSWORD }
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.externalDatabase.existingSecret | default (include "messenger.secretName" .) | trim }}
+                  key: DB_PASSWORD
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: {{ include "messenger.secretName" . }}, key: REDIS_PASSWORD }
+            {{- with .Values.app.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          volumeMounts:
+            - name: files
+              mountPath: /data/files
+            - name: tmp
+              mountPath: /tmp
+          startupProbe:
+            httpGet: { path: /actuator/health/liveness, port: http }
+            periodSeconds: 5
+            failureThreshold: 60
+          livenessProbe:
+            httpGet: { path: /actuator/health/liveness, port: http }
+            periodSeconds: 15
+            failureThreshold: 3
+          readinessProbe:
+            httpGet: { path: /actuator/health/readiness, port: http }
+            periodSeconds: 10
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec:
+                # 라우터/서비스에서 제외될 시간을 확보한 뒤 종료
+                command: ["sh", "-c", "sleep 10"]
+          resources:
+            {{- toYaml .Values.backend.resources | nindent 12 }}
+          securityContext:
+            {{- include "messenger.securityContext" . | nindent 12 }}
+      volumes:
+        - name: files
+          persistentVolumeClaim:
+            claimName: {{ .Values.files.persistence.existingClaim | default (printf "%s-files" $fullname) }}
+        - name: tmp
+          emptyDir: {}
+      affinity:
+        {{- if .Values.backend.affinity }}
+        {{- toYaml .Values.backend.affinity | nindent 8 }}
+        {{- else }}
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    {{- include "messenger.selectorLabels" (dict "ctx" . "component" "backend") | nindent 20 }}
+        {{- end }}
+      {{- with .Values.backend.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.backend.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-backend
+  labels:
+    {{- include "messenger.labels" . | nindent 4 }}
+    {{- include "messenger.selectorLabels" (dict "ctx" . "component" "backend") | nindent 4 }}
+spec:
+  selector:
+    {{- include "messenger.selectorLabels" (dict "ctx" . "component" "backend") | nindent 4 }}
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+{{- if .Values.backend.autoscaling.enabled }}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ $fullname }}-backend
+  labels:
+    {{- include "messenger.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ $fullname }}-backend
+  minReplicas: {{ .Values.backend.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.backend.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.backend.autoscaling.targetCPUUtilizationPercentage }}
+  behavior:
+    scaleDown:
+      # WebSocket 연결이 끊기는 것을 줄이기 위해 천천히 축소
+      stabilizationWindowSeconds: 600
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 300
+{{- end }}
+{{- if .Values.backend.podDisruptionBudget.enabled }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $fullname }}-backend
+  labels:
+    {{- include "messenger.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.backend.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "messenger.selectorLabels" (dict "ctx" . "component" "backend") | nindent 6 }}
+{{- end }}

@@ -1,0 +1,111 @@
+# 폐쇄망 OCP 내부 빌드용 템플릿 (사내 Git + Nexus 미러 사용)
+#
+# 사용 예)
+#   oc process -f openshift/build-template.yaml \
+#     -p GIT_URL=https://gitlab.corp.local/team/messenger.git \
+#     -p GIT_REF=main \
+#     -p BASE_REGISTRY=registry.corp.local:5000 \
+#     -p MAVEN_MIRROR_URL=https://nexus.corp.local/repository/maven-public/ \
+#     -p NPM_REGISTRY=https://nexus.corp.local/repository/npm-public/ \
+#     | oc apply -n messenger -f -
+#   # Git 인증이 필요하면:
+#   #   oc create secret generic git-cred --from-literal=username=<id> --from-literal=password=<token> --type=kubernetes.io/basic-auth
+#   #   oc set build-secret --source bc/messenger-backend git-cred && oc set build-secret --source bc/messenger-frontend git-cred
+#   oc start-build messenger-backend -n messenger --follow
+#   oc start-build messenger-frontend -n messenger --follow
+#
+# 빌드된 이미지는 OCP 내부 레지스트리
+#   image-registry.openshift-image-registry.svc:5000/<namespace>/messenger-backend:<VERSION>
+# 에 저장되며 Helm 설치 시 global.imageRegistry 를 위 주소로 지정한다.
+apiVersion: template.openshift.io/v1
+kind: Template
+metadata:
+  name: messenger-build
+  annotations:
+    description: 사내 메신저 이미지 빌드 (Docker strategy, Nexus 미러)
+parameters:
+  - name: GIT_URL
+    required: true
+    description: 사내 Git 저장소 주소
+  - name: GIT_REF
+    value: main
+  - name: VERSION
+    value: "1.0.0"
+  - name: BASE_REGISTRY
+    description: UBI 베이스 이미지가 미러링된 사내 레지스트리
+    value: registry.access.redhat.com
+  - name: MAVEN_MIRROR_URL
+    value: ""
+  - name: NPM_REGISTRY
+    value: ""
+objects:
+  - apiVersion: image.openshift.io/v1
+    kind: ImageStream
+    metadata:
+      name: messenger-backend
+  - apiVersion: image.openshift.io/v1
+    kind: ImageStream
+    metadata:
+      name: messenger-frontend
+  - apiVersion: build.openshift.io/v1
+    kind: BuildConfig
+    metadata:
+      name: messenger-backend
+    spec:
+      runPolicy: Serial
+      source:
+        type: Git
+        git:
+          uri: ${GIT_URL}
+          ref: ${GIT_REF}
+        contextDir: backend
+      strategy:
+        type: Docker
+        dockerStrategy:
+          dockerfilePath: Dockerfile
+          buildArgs:
+            - name: BUILDER_IMAGE
+              value: ${BASE_REGISTRY}/ubi9/openjdk-21:latest
+            - name: RUNTIME_IMAGE
+              value: ${BASE_REGISTRY}/ubi9/openjdk-21-runtime:latest
+            - name: MAVEN_MIRROR_URL
+              value: ${MAVEN_MIRROR_URL}
+      output:
+        to:
+          kind: ImageStreamTag
+          name: messenger-backend:${VERSION}
+      resources:
+        limits:
+          cpu: "2"
+          memory: 3Gi
+  - apiVersion: build.openshift.io/v1
+    kind: BuildConfig
+    metadata:
+      name: messenger-frontend
+    spec:
+      runPolicy: Serial
+      source:
+        type: Git
+        git:
+          uri: ${GIT_URL}
+          ref: ${GIT_REF}
+        contextDir: frontend
+      strategy:
+        type: Docker
+        dockerStrategy:
+          dockerfilePath: Dockerfile
+          buildArgs:
+            - name: BUILDER_IMAGE
+              value: ${BASE_REGISTRY}/ubi9/nodejs-22:latest
+            - name: RUNTIME_IMAGE
+              value: ${BASE_REGISTRY}/ubi9/nginx-124:latest
+            - name: NPM_REGISTRY
+              value: ${NPM_REGISTRY}
+      output:
+        to:
+          kind: ImageStreamTag
+          name: messenger-frontend:${VERSION}
+      resources:
+        limits:
+          cpu: "2"
+          memory: 2Gi

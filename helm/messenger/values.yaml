@@ -1,0 +1,181 @@
+# =====================================================================
+# 사내 메신저 Helm values
+# 폐쇄망 배포 시 최소 변경 항목:
+#   global.imageRegistry, route.host
+# =====================================================================
+
+global:
+  # 사내 레지스트리 주소. 지정하면 모든 이미지(앱/DB/Redis)의 registry 를 이 값으로 대체한다.
+  # 예) registry.corp.local:5000  또는  image-registry.openshift-image-registry.svc:5000
+  imageRegistry: ""
+  imagePullSecrets: []
+  # - name: internal-registry-pull
+
+nameOverride: ""
+fullnameOverride: ""
+
+# ---------------------------------------------------------------- 애플리케이션 설정
+app:
+  # 비워두면 최초 설치 시 랜덤 생성되어 Secret 에 보관 (업그레이드 시 유지)
+  jwtSecret: ""
+  jwtTtlHours: 12
+  # 최초 관리자 계정 (DB 에 관리자가 없을 때만 생성)
+  adminUsername: admin
+  # 비워두면 랜덤 생성. 설치 후 NOTES 안내에 따라 확인
+  adminPassword: ""
+  # 업로드 최대 크기 (frontend nginx client_max_body_size 도 함께 고려)
+  maxFileSize: 100MB
+  # 업로드 차단 확장자
+  blockedExtensions: "exe,bat,cmd,com,scr,msi,ps1,vbs,js,jar,sh,dll"
+  timezone: Asia/Seoul
+  # 추가 환경변수
+  extraEnv: []
+  # - name: LOGGING_LEVEL_COM_COMPANY
+  #   value: DEBUG
+
+# ---------------------------------------------------------------- 백엔드
+backend:
+  image:
+    registry: ""
+    repository: messenger/messenger-backend
+    tag: "1.0.0"
+    pullPolicy: IfNotPresent
+  replicas: 3
+  javaOpts: "-XX:MaxRAMPercentage=75 -XX:+ExitOnOutOfMemoryError"
+  dbPoolSize: 20
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 8
+    targetCPUUtilizationPercentage: 70
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# ---------------------------------------------------------------- 프론트엔드 (nginx: 정적 파일 + /api, /ws 프록시)
+frontend:
+  image:
+    registry: ""
+    repository: messenger/messenger-frontend
+    tag: "1.0.0"
+    pullPolicy: IfNotPresent
+  replicas: 2
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# ---------------------------------------------------------------- OpenShift Route
+route:
+  enabled: true
+  # 필수. 예) messenger.apps.ocp.corp.local
+  host: ""
+  # WebSocket 장시간 연결을 위한 라우터 타임아웃
+  timeout: 1h
+  tls:
+    enabled: true
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+    # 사내 인증서를 쓰는 경우 PEM 문자열 지정 (비우면 라우터 기본 인증서 사용)
+    certificate: ""
+    key: ""
+    caCertificate: ""
+  annotations: {}
+
+# ---------------------------------------------------------------- 첨부파일 저장소
+files:
+  persistence:
+    # 백엔드가 2개 이상이면 반드시 ReadWriteMany (예: ODF CephFS, NFS)
+    accessMode: ReadWriteMany
+    size: 200Gi
+    storageClass: ""
+    existingClaim: ""
+
+# ---------------------------------------------------------------- PostgreSQL (내장)
+postgresql:
+  enabled: true
+  image:
+    registry: registry.redhat.io
+    repository: rhel9/postgresql-16
+    tag: latest
+    pullPolicy: IfNotPresent
+  database: messenger
+  username: messenger
+  # 비워두면 랜덤 생성
+  password: ""
+  maxConnections: 300
+  sharedBuffers: 512MB
+  persistence:
+    size: 50Gi
+    storageClass: ""
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: "2"
+      memory: 4Gi
+  nodeSelector: {}
+  tolerations: []
+
+# postgresql.enabled=false 인 경우 사용할 외부 DB
+externalDatabase:
+  url: ""            # jdbc:postgresql://db.corp.local:5432/messenger
+  username: ""
+  password: ""
+  existingSecret: ""   # DB_PASSWORD 키를 가진 Secret 이름
+
+# ---------------------------------------------------------------- Redis (내장)
+# Pod 간 실시간 이벤트 중계(Pub/Sub), 접속상태, 로그인 실패 카운트에만 사용 (영속 데이터 없음)
+redis:
+  enabled: true
+  image:
+    registry: registry.redhat.io
+    repository: rhel9/redis-7
+    tag: latest
+    pullPolicy: IfNotPresent
+  # 비워두면 랜덤 생성
+  password: ""
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  nodeSelector: {}
+  tolerations: []
+
+externalRedis:
+  host: ""
+  port: 6379
+  password: ""
+
+# ---------------------------------------------------------------- 기타
+networkPolicy:
+  # DB/Redis 는 백엔드에서만, 백엔드는 프론트엔드(nginx)에서만 접근 허용
+  enabled: true
+
+serviceMonitor:
+  # OpenShift 사용자 워크로드 모니터링 사용 시 활성화 (/actuator/prometheus)
+  enabled: false
+  interval: 30s

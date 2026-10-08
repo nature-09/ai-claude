@@ -1,0 +1,92 @@
+{{- if .Values.postgresql.enabled }}
+{{- $fullname := include "messenger.fullname" . -}}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $fullname }}-postgresql
+  labels:
+    {{- include "messenger.labels" . | nindent 4 }}
+    {{- include "messenger.selectorLabels" (dict "ctx" . "component" "postgresql") | nindent 4 }}
+spec:
+  serviceName: {{ $fullname }}-postgresql
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "messenger.selectorLabels" (dict "ctx" . "component" "postgresql") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "messenger.selectorLabels" (dict "ctx" . "component" "postgresql") | nindent 8 }}
+    spec:
+      {{- include "messenger.imagePullSecrets" . | nindent 6 }}
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: postgresql
+          image: {{ include "messenger.image" (dict "ctx" . "image" .Values.postgresql.image) }}
+          imagePullPolicy: {{ .Values.postgresql.image.pullPolicy }}
+          ports:
+            - name: postgresql
+              containerPort: 5432
+          env:
+            - name: POSTGRESQL_DATABASE
+              value: {{ .Values.postgresql.database | quote }}
+            - name: POSTGRESQL_USER
+              value: {{ .Values.postgresql.username | quote }}
+            - name: POSTGRESQL_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: {{ include "messenger.secretName" . }}, key: DB_PASSWORD }
+            - name: POSTGRESQL_MAX_CONNECTIONS
+              value: {{ .Values.postgresql.maxConnections | quote }}
+            - name: POSTGRESQL_SHARED_BUFFERS
+              value: {{ .Values.postgresql.sharedBuffers | quote }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/pgsql/data
+          readinessProbe:
+            exec:
+              command: ["/bin/sh", "-c", "psql -h 127.0.0.1 -U $POSTGRESQL_USER -q -d $POSTGRESQL_DATABASE -c 'SELECT 1'"]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: postgresql
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          resources:
+            {{- toYaml .Values.postgresql.resources | nindent 12 }}
+          securityContext:
+            {{- include "messenger.securityContext" . | nindent 12 }}
+      {{- with .Values.postgresql.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.postgresql.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: {{ .Values.postgresql.persistence.size }}
+        {{- with .Values.postgresql.persistence.storageClass }}
+        storageClassName: {{ . }}
+        {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-postgresql
+  labels:
+    {{- include "messenger.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "messenger.selectorLabels" (dict "ctx" . "component" "postgresql") | nindent 4 }}
+  ports:
+    - name: postgresql
+      port: 5432
+      targetPort: postgresql
+{{- end }}

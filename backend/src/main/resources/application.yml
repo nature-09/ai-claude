@@ -1,0 +1,68 @@
+server:
+  port: 8080
+  shutdown: graceful
+  forward-headers-strategy: framework
+  tomcat:
+    threads:
+      max: 200
+    max-connections: 20000
+
+spring:
+  application:
+    name: messenger
+  lifecycle:
+    timeout-per-shutdown-phase: 20s
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/messenger}
+    username: ${DB_USERNAME:messenger}
+    password: ${DB_PASSWORD:messenger}
+    hikari:
+      maximum-pool-size: ${DB_POOL_SIZE:20}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        jdbc.time_zone: UTC
+  flyway:
+    enabled: true
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+  servlet:
+    multipart:
+      max-file-size: ${MAX_FILE_SIZE:100MB}
+      max-request-size: ${MAX_FILE_SIZE:100MB}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+  health:
+    redis:
+      enabled: true
+
+app:
+  jwt:
+    # 최소 32바이트 이상. 운영에서는 반드시 Secret 으로 주입
+    secret: ${JWT_SECRET:change-me-change-me-change-me-change-me-0123456789}
+    ttl-hours: ${JWT_TTL_HOURS:12}
+  admin:
+    # 기동 시 관리자 계정이 하나도 없으면 아래 정보로 생성
+    username: ${ADMIN_USERNAME:admin}
+    password: ${ADMIN_PASSWORD:admin1234!}
+  websocket:
+    allowed-origins: ${WS_ALLOWED_ORIGINS:*}
+  files:
+    storage-path: ${FILE_STORAGE_PATH:./data/files}
+    blocked-extensions: ${FILE_BLOCKED_EXTENSIONS:exe,bat,cmd,com,scr,msi,ps1,vbs,js,jar,sh,dll}
+  presence:
+    session-ttl-seconds: 90

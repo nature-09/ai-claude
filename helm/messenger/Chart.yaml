@@ -1,0 +1,7 @@
+apiVersion: v2
+name: messenger
+description: 폐쇄망 OpenShift 용 사내 메신저 (Spring Boot + React, PostgreSQL, Redis)
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+kubeVersion: ">=1.25.0-0"

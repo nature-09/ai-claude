@@ -1,0 +1,121 @@
+{{- $fullname := include "messenger.fullname" . -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $fullname }}-frontend
+  labels:
+    {{- include "messenger.labels" . | nindent 4 }}
+data:
+  backend.conf: |
+    upstream messenger_backend {
+        server {{ $fullname }}-backend:8080;
+        keepalive 32;
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-frontend
+  labels:
+    {{- include "messenger.labels" . | nindent 4 }}
+    {{- include "messenger.selectorLabels" (dict "ctx" . "component" "frontend") | nindent 4 }}
+spec:
+  replicas: {{ .Values.frontend.replicas }}
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      {{- include "messenger.selectorLabels" (dict "ctx" . "component" "frontend") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "messenger.selectorLabels" (dict "ctx" . "component" "frontend") | nindent 8 }}
+    spec:
+      {{- include "messenger.imagePullSecrets" . | nindent 6 }}
+      containers:
+        - name: nginx
+          image: {{ include "messenger.image" (dict "ctx" . "image" .Values.frontend.image) }}
+          imagePullPolicy: {{ .Values.frontend.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+          volumeMounts:
+            - name: backend-conf
+              mountPath: /opt/app-root/etc/messenger/backend.conf
+              subPath: backend.conf
+            - name: tmp
+              mountPath: /tmp
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 15
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "sleep 5"]
+          resources:
+            {{- toYaml .Values.frontend.resources | nindent 12 }}
+          securityContext:
+            {{- include "messenger.securityContext" . | nindent 12 }}
+      volumes:
+        - name: backend-conf
+          configMap:
+            name: {{ $fullname }}-frontend
+        - name: tmp
+          emptyDir: {}
+      affinity:
+        {{- if .Values.frontend.affinity }}
+        {{- toYaml .Values.frontend.affinity | nindent 8 }}
+        {{- else }}
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    {{- include "messenger.selectorLabels" (dict "ctx" . "component" "frontend") | nindent 20 }}
+        {{- end }}
+      {{- with .Values.frontend.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.frontend.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-frontend
+  labels:
+    {{- include "messenger.labels" . | nindent 4 }}
+    {{- include "messenger.selectorLabels" (dict "ctx" . "component" "frontend") | nindent 4 }}
+spec:
+  selector:
+    {{- include "messenger.selectorLabels" (dict "ctx" . "component" "frontend") | nindent 4 }}
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+{{- if .Values.frontend.podDisruptionBudget.enabled }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $fullname }}-frontend
+  labels:
+    {{- include "messenger.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.frontend.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "messenger.selectorLabels" (dict "ctx" . "component" "frontend") | nindent 6 }}
+{{- end }}

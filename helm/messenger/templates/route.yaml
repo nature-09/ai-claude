@@ -1,0 +1,40 @@
+{{- if .Values.route.enabled }}
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: {{ include "messenger.fullname" . }}
+  labels:
+    {{- include "messenger.labels" . | nindent 4 }}
+  annotations:
+    haproxy.router.openshift.io/timeout: {{ .Values.route.timeout | quote }}
+    haproxy.router.openshift.io/timeout-tunnel: {{ .Values.route.timeout | quote }}
+    {{- with .Values.route.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  host: {{ required "route.host 를 지정하세요 (예: messenger.apps.ocp.corp.local)" .Values.route.host }}
+  to:
+    kind: Service
+    name: {{ include "messenger.fullname" . }}-frontend
+    weight: 100
+  port:
+    targetPort: http
+  {{- if .Values.route.tls.enabled }}
+  tls:
+    termination: {{ .Values.route.tls.termination }}
+    insecureEdgeTerminationPolicy: {{ .Values.route.tls.insecureEdgeTerminationPolicy }}
+    {{- with .Values.route.tls.certificate }}
+    certificate: |
+      {{- . | nindent 6 }}
+    {{- end }}
+    {{- with .Values.route.tls.key }}
+    key: |
+      {{- . | nindent 6 }}
+    {{- end }}
+    {{- with .Values.route.tls.caCertificate }}
+    caCertificate: |
+      {{- . | nindent 6 }}
+    {{- end }}
+  {{- end }}
+  wildcardPolicy: None
+{{- end }}

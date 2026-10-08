@@ -1,0 +1,67 @@
+{{- if .Values.networkPolicy.enabled }}
+{{- $fullname := include "messenger.fullname" . -}}
+# 백엔드: 프론트엔드(nginx) Pod 및 모니터링 네임스페이스에서만 접근 허용
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-backend
+  labels:
+    {{- include "messenger.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "messenger.selectorLabels" (dict "ctx" . "component" "backend") | nindent 6 }}
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "messenger.selectorLabels" (dict "ctx" . "component" "frontend") | nindent 14 }}
+        - namespaceSelector:
+            matchLabels:
+              network.openshift.io/policy-group: monitoring
+      ports:
+        - port: 8080
+{{- if .Values.postgresql.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-postgresql
+  labels:
+    {{- include "messenger.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "messenger.selectorLabels" (dict "ctx" . "component" "postgresql") | nindent 6 }}
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "messenger.selectorLabels" (dict "ctx" . "component" "backend") | nindent 14 }}
+      ports:
+        - port: 5432
+{{- end }}
+{{- if .Values.redis.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-redis
+  labels:
+    {{- include "messenger.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "messenger.selectorLabels" (dict "ctx" . "component" "redis") | nindent 6 }}
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "messenger.selectorLabels" (dict "ctx" . "component" "backend") | nindent 14 }}
+      ports:
+        - port: 6379
+{{- end }}
+{{- end }}
