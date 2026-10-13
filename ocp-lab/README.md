@@ -29,7 +29,9 @@ lab init student01 && lab login && eval "$(lab env)"
 lab list
 lab start ex280-05 ; lab guide ex280-05 ; lab grade ex280-05 ; lab finish ex280-05
 ```
-자세한 절차: [docs/INSTALL.md](docs/INSTALL.md) · 강사용: [docs/INSTRUCTOR.md](docs/INSTRUCTOR.md) · 오퍼레이터 미러링: [docs/OPERATORS.md](docs/OPERATORS.md)
+> 사내 메신저(저장소 루트)와는 **별개 프로젝트**입니다. 코드·이미지·번들을 공유하지 않으며 같은 클러스터에 함께 올려도 충돌하지 않습니다.
+
+**적용 절차(체크리스트): [docs/APPLY.md](docs/APPLY.md)** · 상세 설치: [docs/INSTALL.md](docs/INSTALL.md) · 강사용: [docs/INSTRUCTOR.md](docs/INSTRUCTOR.md) · 오퍼레이터 미러링: [docs/OPERATORS.md](docs/OPERATORS.md)
 
 ## 실습 목록
 
@@ -90,7 +92,7 @@ images/lab-app/   실습용 샘플 앱 (Go) — HTTP/HTTPS/TCP echo, 프로브·
 images/toolbox/   툴박스 이미지 (ubi9 + oc/kubectl/helm + lab)
 mirror/           oc-mirror ImageSetConfiguration (실습용 오퍼레이터)
 scripts/          build-images.sh, export-bundle.sh (인터넷) / import-bundle.sh, install-bastion.sh (bastion)
-docs/             INSTALL.md, INSTRUCTOR.md, OPERATORS.md
+docs/             APPLY.md(적용 절차), INSTALL.md, INSTRUCTOR.md, OPERATORS.md
 lab.env.example   /etc/ocp-lab/lab.env 견본
 ```
 
