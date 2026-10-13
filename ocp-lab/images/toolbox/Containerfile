@@ -1,0 +1,40 @@
+# ocp-lab 툴박스: oc / kubectl / helm / lab 명령이 들어 있는 실습용 셸 이미지
+#   빌드 컨텍스트 = ocp-lab 디렉터리 (scripts/build-images.sh 가 clients/ 를 먼저 내려받음)
+#   실행: lab-shell  (또는 podman run -it --rm -v ~/ocp-lab-home:/work:Z <이미지>)
+ARG BASE_IMAGE=registry.access.redhat.com/ubi9/ubi:latest
+FROM ${BASE_IMAGE}
+
+ARG LAB_VERSION=dev
+LABEL name="ocp-lab/lab-toolbox" version="${LAB_VERSION}" \
+      summary="OpenShift 실습 툴박스 (oc, helm, lab)"
+
+RUN dnf install -y --nodocs --setopt=install_weak_deps=False \
+      bash-completion jq openssl httpd-tools git-core less vim-minimal tar gzip \
+      findutils which procps-ng hostname diffutils \
+ && dnf clean all && rm -rf /var/cache/dnf
+
+COPY images/toolbox/clients/ /tmp/clients/
+RUN tar xzf /tmp/clients/openshift-client-linux.tar.gz -C /usr/local/bin oc kubectl \
+ && install -m 0755 /tmp/clients/helm /usr/local/bin/helm \
+ && rm -rf /tmp/clients \
+ && oc completion bash > /etc/bash_completion.d/oc \
+ && kubectl completion bash > /etc/bash_completion.d/kubectl \
+ && helm completion bash > /etc/bash_completion.d/helm
+
+COPY VERSION /opt/ocp-lab/VERSION
+COPY bin/ /opt/ocp-lab/bin/
+COPY lib/ /opt/ocp-lab/lib/
+COPY exercises/ /opt/ocp-lab/exercises/
+COPY docs/ /opt/ocp-lab/docs/
+COPY images/toolbox/profile.sh /etc/profile.d/zz-ocp-lab.sh
+COPY images/toolbox/lab-completion.bash /etc/bash_completion.d/lab
+
+RUN chmod 0755 /opt/ocp-lab/bin/* \
+ && ln -s /opt/ocp-lab/bin/lab /usr/local/bin/lab \
+ && ln -s /opt/ocp-lab/bin/lab-admin /usr/local/bin/lab-admin \
+ && mkdir -p /work && chmod 1777 /work
+
+# /work 를 호스트 디렉터리로 마운트하면 kubeconfig, 작업 파일이 유지됨
+ENV LAB_HOME=/opt/ocp-lab HOME=/work KUBECONFIG=/work/.kube/config LAB_IN_TOOLBOX=1
+WORKDIR /work
+CMD ["/bin/bash", "-l"]

@@ -1,0 +1,104 @@
+apiVersion: template.openshift.io/v1
+kind: Template
+metadata:
+  name: mysql-persistent-lab
+  annotations:
+    openshift.io/display-name: MySQL (Persistent, Lab)
+    description: PVC 를 사용하는 MySQL 8.0 (실습용)
+    tags: database,mysql,lab
+labels:
+  template: mysql-persistent-lab
+parameters:
+- name: APP_NAME
+  description: 리소스 이름
+  value: mysql
+  required: true
+- name: MYSQL_USER
+  description: DB 사용자
+  required: true
+- name: MYSQL_PASSWORD
+  description: DB 비밀번호 (지정하지 않으면 자동 생성)
+  generate: expression
+  from: "[a-zA-Z0-9]{12}"
+- name: MYSQL_DATABASE
+  description: DB 이름
+  value: sampledb
+- name: VOLUME_CAPACITY
+  description: PVC 크기
+  value: 1Gi
+- name: MYSQL_IMAGE
+  description: MySQL 이미지
+  value: "@@IMG_MYSQL@@"
+objects:
+- apiVersion: v1
+  kind: Secret
+  metadata:
+    name: ${APP_NAME}
+  stringData:
+    database-user: ${MYSQL_USER}
+    database-password: ${MYSQL_PASSWORD}
+    database-name: ${MYSQL_DATABASE}
+- apiVersion: v1
+  kind: PersistentVolumeClaim
+  metadata:
+    name: ${APP_NAME}
+  spec:
+    accessModes: [ReadWriteOnce]
+    resources:
+      requests:
+        storage: ${VOLUME_CAPACITY}
+- apiVersion: v1
+  kind: Service
+  metadata:
+    name: ${APP_NAME}
+  spec:
+    selector:
+      app: ${APP_NAME}
+    ports:
+    - name: mysql
+      port: 3306
+- apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    name: ${APP_NAME}
+    labels:
+      app: ${APP_NAME}
+  spec:
+    replicas: 1
+    strategy:
+      type: Recreate          # RWO 볼륨은 한 번에 한 파드만 붙일 수 있으므로
+    selector:
+      matchLabels:
+        app: ${APP_NAME}
+    template:
+      metadata:
+        labels:
+          app: ${APP_NAME}
+      spec:
+        containers:
+        - name: mysql
+          image: ${MYSQL_IMAGE}
+          ports:
+          - containerPort: 3306
+          env:
+          - name: MYSQL_USER
+            valueFrom: {secretKeyRef: {name: "${APP_NAME}", key: database-user}}
+          - name: MYSQL_PASSWORD
+            valueFrom: {secretKeyRef: {name: "${APP_NAME}", key: database-password}}
+          - name: MYSQL_DATABASE
+            valueFrom: {secretKeyRef: {name: "${APP_NAME}", key: database-name}}
+          readinessProbe:
+            exec:
+              command: ["/bin/sh", "-c", "MYSQL_PWD=\"$MYSQL_PASSWORD\" mysqladmin -h 127.0.0.1 -u \"$MYSQL_USER\" ping"]
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {memory: 1Gi}
+          volumeMounts:
+          - name: data
+            mountPath: /var/lib/mysql/data
+        volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: ${APP_NAME}

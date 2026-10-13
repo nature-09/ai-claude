@@ -1,0 +1,28 @@
+# TODO: 빈 칸을 채우고 oc apply -f cronjob.yaml
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: report
+spec:
+  schedule: ""                      # TODO: 2분마다
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          serviceAccountName: ""    # TODO: report-sa
+          restartPolicy: Never
+          containers:
+          - name: report
+            image: "@@IMG_TOOLBOX@@"
+            command: ["/bin/bash", "-c"]
+            args:
+            - |
+              echo "[$(date)] report by ${REPORT_USER}"
+              oc get pods -o name
+            env:
+            - name: REPORT_USER       # TODO: Secret api-creds 의 API_USER 키에서 가져오기
+              value: ""

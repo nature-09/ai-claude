@@ -1,0 +1,235 @@
+#!/usr/bin/env bash
+# 강사용 도구: 클러스터 사전 점검, 수강생 계정, 진도(채점) 현황, 정리, MetalLB 구성
+set -uo pipefail
+
+LAB_HOME="${LAB_HOME:-$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)}"
+export LAB_HOME
+# shellcheck source=../lib/common.sh
+. "$LAB_HOME/lib/common.sh"
+
+STUDENT_IDP="${LAB_STUDENT_IDP:-ocp-lab-students}"
+STUDENT_SECRET="$STUDENT_IDP-htpasswd"
+STUDENT_GROUP="${LAB_STUDENT_GROUP:-ocp-lab-students}"
+STUDENT_ROLE="${LAB_STUDENT_ROLE:-cluster-admin}"
+
+usage() {
+  cat <<EOF
+${C_BLD}ocp-lab 강사 도구 ($LAB_VERSION)${C_OFF}
+
+사용법: lab-admin <명령>
+
+  check                                클러스터 사전 점검 (레지스트리, 스토리지, 메트릭, 카탈로그 ...)
+  students create <수> [접두어] [비밀번호]  수강생 계정 생성 (기본: student01.. / 무작위 비밀번호)
+  students list                        수강생 목록
+  students delete                      수강생 IdP/계정/권한 삭제
+  progress <실습|all> [수강생...]        수강생별 채점 결과 표
+  cleanup <수강생|--all>                 수강생이 만든 실습 리소스 전체 정리
+  metallb <시작IP-끝IP>                  MetalLB IPAddressPool/L2Advertisement 구성 (오퍼레이터 설치 후)
+
+환경 변수: LAB_STUDENT_ROLE (기본 cluster-admin), LAB_STUDENT_IDP, LAB_STUDENT_GROUP
+EOF
+}
+
+# ------------------------------------------------------------------ check
+cmd_check() {
+  require_oc
+  local ok=0 bad=0 w=0
+  pass_() { echo " ${C_GRN}[ OK ]${C_OFF} $*"; ok=$((ok+1)); }
+  fail_() { echo " ${C_RED}[FAIL]${C_OFF} $*"; bad=$((bad+1)); }
+  warn_() { echo " ${C_YEL}[WARN]${C_OFF} $*"; w=$((w+1)); }
+
+  title "클러스터"
+  echo "  API: $(api_url)   사용자: $(oc whoami)   버전: $(jp '' clusterversion/version '{.status.desired.version}')"
+  oc auth can-i '*' '*' -A >/dev/null 2>&1 && [ "$(oc auth can-i '*' '*' -A)" = yes ] && pass_ "cluster-admin 권한" || fail_ "cluster-admin 권한이 필요합니다"
+  local deg; deg="$(oc get clusteroperators -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.status.conditions[?(@.type=="Degraded")].status}{" "}{.status.conditions[?(@.type=="Available")].status}{"\n"}{end}' | awk '$2=="True" || $3!="True" {print $1}')"
+  [ -z "$deg" ] && pass_ "ClusterOperator 모두 정상" || warn_ "비정상 ClusterOperator: $(echo $deg)"
+  echo "  apps 도메인: $(apps_domain)"
+
+  title "설정 (lab.env)"
+  [ -n "${LAB_REGISTRY:-}" ] && pass_ "LAB_REGISTRY=$LAB_REGISTRY (prefix $LAB_REPO_PREFIX)" || fail_ "LAB_REGISTRY 미설정"
+  echo "  LAB_SHARED=$LAB_SHARED  LAB_OPERATOR_PACKAGE=$LAB_OPERATOR_PACKAGE  LAB_API_URL=${LAB_API_URL:-(미설정)}"
+
+  title "도구"
+  local c; for c in oc helm jq openssl curl; do command -v $c >/dev/null 2>&1 && pass_ "$c" || { [ $c = helm ] && warn_ "helm 없음 (ex280-06/15)" || fail_ "$c 없음"; }; done
+  command -v htpasswd >/dev/null 2>&1 && pass_ "htpasswd" || warn_ "htpasswd 없음 (openssl 로 대체, httpd-tools 설치 권장)"
+
+  title "스토리지 / 레지스트리 / 메트릭"
+  local sc; sc="$(oc get storageclass -o jsonpath='{.items[?(@.metadata.annotations.storageclass\.kubernetes\.io/is-default-class=="true")].metadata.name}')"
+  [ -n "$sc" ] && pass_ "기본 StorageClass: $sc" || fail_ "기본 StorageClass 없음 (ocp-04, ex280-08, ex280-15)"
+  local reg; reg="$(jp '' configs.imageregistry.operator.openshift.io/cluster '{.spec.managementState}')"
+  [ "$reg" = Managed ] && pass_ "내부 이미지 레지스트리 Managed" || warn_ "내부 이미지 레지스트리 상태 '$reg' (ocp-05 빌드 실습 불가)"
+  oc get apiservice v1beta1.metrics.k8s.io >/dev/null 2>&1 && pass_ "metrics API (HPA)" || warn_ "metrics API 없음 (ex280-07 HPA)"
+  if oc get ipaddresspools.metallb.io -A --no-headers 2>/dev/null | grep -q .; then pass_ "MetalLB IPAddressPool 구성됨"; else warn_ "MetalLB 미구성 (ex280-11 LoadBalancer 는 SKIP 처리)"; fi
+  oc get packagemanifest -n openshift-marketplace "$LAB_OPERATOR_PACKAGE" >/dev/null 2>&1 && pass_ "카탈로그에 $LAB_OPERATOR_PACKAGE 있음" || warn_ "카탈로그에 $LAB_OPERATOR_PACKAGE 없음 (ex280-14, docs/OPERATORS.md 참고)"
+  local idps; idps="$(jp '' oauth/cluster '{.spec.identityProviders[*].name}')"
+  echo "  OAuth IdP: ${idps:-(없음)}"
+
+  title "실습 이미지 pull 시험 (임시 네임스페이스)"
+  if [ -n "${LAB_REGISTRY:-}" ]; then
+    local ns="ocp-lab-check-$$" img
+    oc create namespace "$ns" >/dev/null
+    for img in "$IMG_APP:v1" "$IMG_APP:v2" "$IMG_APP:v3" "$IMG_APP:legacy" "$IMG_UBI" "$IMG_HTTPD" "$IMG_MYSQL" "$IMG_TOOLBOX"; do
+      local name; name="p$(echo "$img" | md5sum | cut -c1-8)"
+      oc run "$name" -n "$ns" --image="$img" --restart=Never --command -- sleep 5 >/dev/null 2>&1
+    done
+    sleep 25
+    local line
+    while read -r line; do
+      local pn img st; pn="${line%% *}"; img="$(oc get pod -n "$ns" "$pn" -o jsonpath='{.spec.containers[0].image}')"
+      st="$(oc get pod -n "$ns" "$pn" -o jsonpath='{.status.containerStatuses[0].state.waiting.reason}')"
+      case "$st" in ErrImagePull|ImagePullBackOff|InvalidImageName) fail_ "pull 실패: $img ($st)";; *) pass_ "pull 가능: $img";; esac
+    done < <(oc get pods -n "$ns" --no-headers 2>/dev/null)
+    oc import-image check:latest -n "$ns" --from="$IMG_APP:v1" --confirm >/dev/null 2>&1 &&
+      pass_ "ImageStream import 가능 (레지스트리 CA 신뢰됨)" ||
+      warn_ "ImageStream import 실패 — image.config 의 additionalTrustedCA 또는 레지스트리 인증 확인 (ocp-05, ex280-05)"
+    oc delete namespace "$ns" --wait=false >/dev/null
+  fi
+  echo
+  echo "${C_BLD}결과: OK $ok, WARN $w, FAIL $bad${C_OFF}"
+  [ "$bad" -eq 0 ]
+}
+
+# ------------------------------------------------------------------ students
+student_list() { jp '' "group/$STUDENT_GROUP" '{.users[*]}' | tr ' ' '\n' | grep . ; }
+
+cmd_students() {
+  require_oc
+  local sub="${1:-list}"; shift || true
+  case "$sub" in
+    create)
+      local n="${1:?수강생 수를 지정하세요}" prefix="${2:-student}" pw="${3:-}"
+      local out="$PWD/ocp-lab-students.csv" f i name p
+      f="$(mktemp)"
+      # 기존 htpasswd 가 있으면 이어서 사용
+      oc extract "secret/$STUDENT_SECRET" -n openshift-config --keys=htpasswd --to=- 2>/dev/null > "$f" || true
+      echo "username,password" > "$out"
+      for i in $(seq -w 1 "$n"); do
+        name="$prefix$i"
+        [ ${#i} -lt 2 ] && name="${prefix}0$i"
+        p="${pw:-$(openssl rand -base64 9 | tr -dc 'A-Za-z0-9' | cut -c1-10)}"
+        sed -i "/^$name:/d" "$f"
+        htpasswd_line "$name" "$p" >> "$f"
+        echo "$name,$p" >> "$out"
+      done
+      oc create secret generic "$STUDENT_SECRET" -n openshift-config --from-file=htpasswd="$f" --dry-run=client -o yaml | oc apply -f - >/dev/null
+      rm -f "$f"
+      oauth_add_idp "$STUDENT_IDP" "$STUDENT_SECRET"
+      oc get group "$STUDENT_GROUP" >/dev/null 2>&1 || oc adm groups new "$STUDENT_GROUP" >/dev/null
+      # shellcheck disable=SC2046
+      oc adm groups add-users "$STUDENT_GROUP" $(tail -n +2 "$out" | cut -d, -f1) >/dev/null
+      oc create clusterrolebinding "$STUDENT_GROUP-role" --clusterrole="$STUDENT_ROLE" --group="$STUDENT_GROUP" --dry-run=client -o yaml | oc apply -f - >/dev/null
+      info "IdP '$STUDENT_IDP' 에 수강생 $n 명 생성, 그룹 '$STUDENT_GROUP' 에 '$STUDENT_ROLE' 부여"
+      info "계정 목록: $out  (안전하게 보관하세요)"
+      info "OAuth 서버 재시작(1~3분) 후 로그인할 수 있습니다"
+      ;;
+    list)
+      student_list || echo "(수강생 없음)"
+      ;;
+    delete)
+      local s
+      for s in $(student_list); do
+        oc delete user "$s" --ignore-not-found >/dev/null
+        oc delete identity "$STUDENT_IDP:$s" --ignore-not-found >/dev/null
+      done
+      oc delete clusterrolebinding "$STUDENT_GROUP-role" --ignore-not-found >/dev/null
+      oc delete group "$STUDENT_GROUP" --ignore-not-found >/dev/null
+      oauth_remove_idp "$STUDENT_IDP"
+      oc delete secret "$STUDENT_SECRET" -n openshift-config --ignore-not-found >/dev/null
+      info "수강생 계정 삭제 완료"
+      ;;
+    *) usage; exit 1 ;;
+  esac
+}
+
+# ------------------------------------------------------------------ progress
+cmd_progress() {
+  require_oc
+  local ex="${1:?실습 ID 또는 all}"; shift
+  local -a students=("$@") exs=()
+  [ ${#students[@]} -eq 0 ] && mapfile -t students < <(student_list)
+  [ ${#students[@]} -eq 0 ] && die "수강생이 없습니다 (lab-admin progress <실습> student01 student02 ...)"
+  if [ "$ex" = all ]; then
+    local d; for d in "$LAB_HOME"/exercises/*/; do exs+=("$(basename "$d")"); done
+  else
+    exs=("$ex")
+  fi
+  local s e r
+  printf '%-14s' "수강생"; for e in "${exs[@]}"; do printf ' %-12s' "$(cut -d- -f1-2 <<<"$e")"; done; echo
+  for s in "${students[@]}"; do
+    printf '%-14s' "$s"
+    for e in "${exs[@]}"; do
+      r="$(LAB_USER="$s" LAB_QUIET=1 "$LAB_HOME/bin/lab" grade "$e" 2>/dev/null | tail -1)"
+      r="${r#PASS }"; r="${r#SCORE }"
+      printf ' %-12s' "${r:--}"
+    done
+    echo
+  done
+}
+
+# ------------------------------------------------------------------ cleanup
+cleanup_student() {
+  local s="$1" ns x
+  valid_user "$s" || die "수강생 이름 형식 오류: $s"
+  info "[$s] 정리"
+  for ns in $( { oc get ns -l "ocp-lab/student=$s" -o name; oc get ns -o name | grep "^namespace/$s-"; } 2>/dev/null | sort -u); do
+    oc delete "$ns" --wait=false >/dev/null 2>&1 && echo "  삭제: $ns"
+  done
+  for x in $(jp '' oauth/cluster '{.spec.identityProviders[*].name}' | tr ' ' '\n' | grep "^$s-"); do oauth_remove_idp "$x"; done
+  for x in $(oc get secret -n openshift-config -o name | grep "^secret/$s-"); do oc delete -n openshift-config "$x" >/dev/null && echo "  삭제: $x"; done
+  for x in $(oc get template -n openshift-config -o name 2>/dev/null | grep "^template.template.openshift.io/$s-"); do oc delete -n openshift-config "$x" >/dev/null && echo "  삭제: $x"; done
+  for x in $(oc get users -o name | grep "^user.user.openshift.io/$s-"); do oc delete "$x" >/dev/null && echo "  삭제: $x"; done
+  for x in $(oc get identities -o name | grep "/$s-.*:$s-"); do oc delete "$x" >/dev/null; done
+  for x in $(oc get groups -o name | grep "^group.user.openshift.io/$s-"); do oc delete "$x" >/dev/null && echo "  삭제: $x"; done
+  for x in $(oc get clusterresourcequota -o name 2>/dev/null | grep "/$s-"); do oc delete "$x" >/dev/null && echo "  삭제: $x"; done
+  for x in $(oc get clusterrolebinding -o json | jq -r --arg p "$s-" '.items[] | select(any(.subjects[]?; .kind=="User" and (.name|startswith($p)))) | .metadata.name'); do
+    # shellcheck disable=SC2046
+    oc adm policy remove-cluster-role-from-user "$(jp '' "clusterrolebinding/$x" '{.roleRef.name}')" $(jp '' "clusterrolebinding/$x" '{.subjects[*].name}' | tr ' ' '\n' | grep "^$s-") >/dev/null 2>&1
+  done
+  if [ "$(jp '' project.config.openshift.io/cluster '{.spec.projectRequestTemplate.name}')" = "$s-project-request" ]; then
+    oc patch project.config.openshift.io cluster --type=json -p '[{"op":"remove","path":"/spec/projectRequestTemplate"}]' >/dev/null && echo "  projects.config 원복"
+  fi
+}
+cmd_cleanup() {
+  require_oc; require_cmd jq
+  local t="${1:?수강생 이름 또는 --all}"
+  if [ "$t" = --all ]; then
+    local s; for s in $( { student_list; oc get ns -o jsonpath='{.items[*].metadata.labels.ocp-lab/student}' | tr ' ' '\n'; } | grep . | sort -u); do cleanup_student "$s"; done
+  else
+    cleanup_student "$t"
+  fi
+}
+
+# ------------------------------------------------------------------ metallb
+cmd_metallb() {
+  require_oc
+  local range="${1:?IP 범위를 지정하세요 (예: 192.168.10.200-192.168.10.220)}"
+  oc get csv -n metallb-system 2>/dev/null | grep -q metallb || die "metallb-system 에 MetalLB Operator 가 없습니다. docs/OPERATORS.md 참고해 먼저 설치하세요"
+  oc apply -f - >/dev/null <<YAML
+apiVersion: metallb.io/v1beta1
+kind: MetalLB
+metadata: {name: metallb, namespace: metallb-system}
+---
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata: {name: ocp-lab-pool, namespace: metallb-system}
+spec:
+  addresses: ["$range"]
+---
+apiVersion: metallb.io/v1beta1
+kind: L2Advertisement
+metadata: {name: ocp-lab-l2, namespace: metallb-system}
+spec:
+  ipAddressPools: [ocp-lab-pool]
+YAML
+  info "MetalLB 구성 완료: $range (L2)"
+}
+
+cmd="${1:-help}"; shift || true
+case "$cmd" in
+  check)    cmd_check ;;
+  students) cmd_students "$@" ;;
+  progress) cmd_progress "$@" ;;
+  cleanup)  cmd_cleanup "$@" ;;
+  metallb)  cmd_metallb "$@" ;;
+  *)        usage ;;
+esac

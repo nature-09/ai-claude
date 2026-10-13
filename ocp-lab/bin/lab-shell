@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# bastion 에서 실습 툴박스 컨테이너 실행
+#   lab-shell                 대화형 셸
+#   lab-shell lab list        명령 한 번 실행
+# 설정: /etc/ocp-lab/lab.env 의 LAB_* 값을 컨테이너에 전달
+set -euo pipefail
+CONF="${LAB_CONFIG:-/etc/ocp-lab/lab.env}"
+HERE="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+VERSION="$(cat "$HERE/VERSION" 2>/dev/null || echo latest)"
+
+declare -a envs=()
+if [ -r "$CONF" ]; then
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line#"${line%%[![:space:]]*}"}"
+    [[ "$line" =~ ^(export[[:space:]]+)?(LAB_[A-Z0-9_]*)=(.*)$ ]] || continue
+    key="${BASH_REMATCH[2]}" val="${BASH_REMATCH[3]}"
+    val="${val%%[[:space:]]#*}"; val="${val%\"}"; val="${val#\"}"; val="${val%\'}"; val="${val#\'}"
+    case "$key" in LAB_WORKDIR|LAB_HOME|LAB_CONFIG|LAB_API_CA) continue ;; esac   # 호스트 경로는 전달하지 않음
+    [ -n "${!key:-}" ] && val="${!key}"         # 현재 셸의 값이 우선
+    envs+=(-e "$key=$val")
+    declare "$key=$val"
+  done < "$CONF"
+fi
+[ -n "${LAB_USER:-}" ] && envs+=(-e "LAB_USER=$LAB_USER")
+
+: "${LAB_REGISTRY:?$CONF 에 LAB_REGISTRY 가 없습니다}"
+IMAGE="${LAB_TOOLBOX_IMAGE:-$LAB_REGISTRY/${LAB_REPO_PREFIX:-ocp-lab}/lab-toolbox:$VERSION}"
+HOME_DIR="${LAB_SHELL_HOME:-$HOME/ocp-lab-home}"
+mkdir -p "$HOME_DIR"
+
+ENGINE=podman; command -v podman >/dev/null 2>&1 || ENGINE=docker
+if ! $ENGINE image inspect "$IMAGE" >/dev/null 2>&1; then
+  echo ">> 툴박스 이미지 pull: $IMAGE"
+  $ENGINE pull ${LAB_TLS_VERIFY:+--tls-verify=$LAB_TLS_VERIFY} "$IMAGE"
+fi
+
+[ $# -eq 0 ] && set -- /bin/bash -l
+tty=(-i); [ -t 0 ] && tty=(-it)
+exec $ENGINE run "${tty[@]}" --rm --network host --hostname ocp-lab \
+  --name "ocp-lab-$(id -un)-$$" \
+  "${envs[@]}" -e LAB_CONFIG=/nonexistent \
+  -v "$HOME_DIR:/work:Z" \
+  "$IMAGE" "$@"

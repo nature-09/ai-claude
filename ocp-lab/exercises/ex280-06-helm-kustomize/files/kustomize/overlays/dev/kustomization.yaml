@@ -1,0 +1,17 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: @@LAB_USER@@-kustomize-dev
+resources:
+- ../../base
+labels:
+- pairs:
+    env: dev
+images:
+- name: lab-app
+  newName: "@@IMG_APP@@"
+  newTag: v1
+configMapGenerator:
+- name: kapp-config
+  behavior: merge
+  literals:
+  - APP_MESSAGE=dev

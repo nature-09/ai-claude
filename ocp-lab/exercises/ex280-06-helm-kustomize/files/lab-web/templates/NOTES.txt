@@ -1,0 +1,4 @@
+lab-web {{ .Values.image.tag }} 배포 완료 (릴리스: {{ .Release.Name }}, 리비전: {{ .Release.Revision }})
+{{- if .Values.route.enabled }}
+  접속: oc get route {{ include "lab-web.fullname" . }} -n {{ .Release.Namespace }}
+{{- end }}

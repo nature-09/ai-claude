@@ -1,0 +1,32 @@
+# oc-mirror v2 — ocp-lab 실습용 오퍼레이터 미러링 목록
+#
+# (인터넷 환경)  oc mirror -c imageset-config.yaml file:///data/oc-mirror --v2
+# (폐쇄망)       oc mirror -c imageset-config.yaml --from file:///data/oc-mirror docker://registry.corp.local:5000 --v2
+#               → working-dir/cluster-resources/ 의 CatalogSource, IDMS/ITMS 를 oc apply
+#
+# ※ 카탈로그 태그(v4.19)는 클러스터 마이너 버전과 맞추세요 (4.20 이면 v4.20).
+# ※ 채널은 생략하면 기본 채널의 최신 버전만 받습니다. 용량을 줄이려면 channels 로 고정하세요.
+kind: ImageSetConfiguration
+apiVersion: mirror.openshift.io/v2alpha1
+mirror:
+  operators:
+  - catalog: registry.redhat.io/redhat/redhat-operator-index:v4.19
+    packages:
+    # [필수] ex280-14 오퍼레이터 설치 실습 — 수강생별 네임스페이스(OwnNamespace)에 설치 가능
+    - name: rhbk-operator
+    # [권장] ex280-11 LoadBalancer 서비스 — 강사가 1회 설치 후 lab-admin metallb <IP범위>
+    - name: metallb-operator
+    # [선택] 웹 콘솔에서 바로 쓰는 터미널 (oc/helm 포함). web-terminal 은 devworkspace-operator 에 의존
+    - name: web-terminal
+    - name: devworkspace-operator
+    # [선택] 동적 스토리지가 없는 클러스터(단일 노드/소규모)용 로컬 디스크 LVM 프로비저너
+    # - name: lvms-operator
+    # [선택] ex280-14 대체 오퍼레이터 (OwnNamespace 지원) — LAB_OPERATOR_PACKAGE 로 지정
+    # - name: datagrid
+    # - name: amq-broker-rhel8
+
+  # 실습 기본 이미지를 oc-mirror 로 함께 옮기고 싶을 때 (번들의 import-bundle.sh 를 쓰면 필요 없음)
+  # additionalImages:
+  # - name: registry.access.redhat.com/ubi9/ubi:latest
+  # - name: registry.access.redhat.com/ubi9/httpd-24:latest
+  # - name: registry.redhat.io/rhel9/mysql-80:latest

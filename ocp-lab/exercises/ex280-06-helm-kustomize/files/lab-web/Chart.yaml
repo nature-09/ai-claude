@@ -1,0 +1,6 @@
+apiVersion: v2
+name: lab-web
+description: OCP 실습용 웹 애플리케이션 (lab-app)
+type: application
+version: 1.0.0
+appVersion: "v1"

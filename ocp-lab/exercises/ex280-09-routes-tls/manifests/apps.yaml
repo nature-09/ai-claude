@@ -1,0 +1,68 @@
+# web: HTTP 앱 (edge 실습)
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: web, labels: {app: web}}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: web}}
+  template:
+    metadata: {labels: {app: web}}
+    spec:
+      containers:
+      - name: lab-app
+        image: "@@IMG_APP@@:v1"
+        env: [{name: APP_MESSAGE, value: "edge route"}]
+        ports: [{containerPort: 8080}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: web}
+spec:
+  selector: {app: web}
+  ports: [{name: http, port: 8080, targetPort: 8080}]
+---
+# secure: 앱이 직접 TLS 를 처리 (passthrough 실습) — 인증서 Secret 마운트는 수강생이 추가
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: secure, labels: {app: secure}}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: secure}}
+  template:
+    metadata: {labels: {app: secure}}
+    spec:
+      containers:
+      - name: lab-app
+        image: "@@IMG_APP@@:v1"
+        env: [{name: APP_MESSAGE, value: "passthrough route"}]
+        ports: [{containerPort: 8443}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: secure}
+spec:
+  selector: {app: secure}
+  ports: [{name: https, port: 8443, targetPort: 8443}]
+---
+# internal: 서비스 CA 인증서로 TLS (reencrypt 실습) — 서비스 어노테이션/마운트는 수강생이 추가
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: internal, labels: {app: internal}}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: internal}}
+  template:
+    metadata: {labels: {app: internal}}
+    spec:
+      containers:
+      - name: lab-app
+        image: "@@IMG_APP@@:v1"
+        env: [{name: APP_MESSAGE, value: "reencrypt route"}]
+        ports: [{containerPort: 8443}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: internal}
+spec:
+  selector: {app: internal}
+  ports: [{name: https, port: 8443, targetPort: 8443}]

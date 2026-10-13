@@ -1,0 +1,11 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# TODO 1: 네임스페이스를 @@LAB_USER@@-kustomize-prod 로 지정
+resources:
+- ../../base
+labels:
+- pairs:
+    env: prod
+# TODO 2: replicas 를 3 으로 (replicas: 필드 또는 patches 사용)
+# TODO 3: 이미지 lab-app 을 @@IMG_APP@@ 의 v2 태그로 (images: 필드, dev overlay 참고)
+# TODO 4: configMapGenerator 로 APP_MESSAGE=prod (behavior: merge)

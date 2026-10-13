@@ -40,6 +40,8 @@
 - 백엔드 Pod끼리는 **Redis Pub/Sub**로 이벤트를 주고받습니다. 그래서 sticky session 없이 Pod를 늘릴 수 있습니다.
 - 브라우저는 nginx 하나만 바라보므로 Route는 1개면 됩니다.
 
+> **OCP 실습 환경(ocp-lab)**: 폐쇄망 OCP 기본 기능 + EX280(RHCOA) 대비 실습 키트는 [`ocp-lab/`](ocp-lab/README.md) 에 있습니다.
+
 ## 디렉터리 구조
 
 ```
@@ -50,6 +52,7 @@ openshift/          OCP 내부 빌드용 BuildConfig 템플릿 (사내 Git + Nex
 scripts/            이미지 빌드, 폐쇄망 반입 번들 생성/업로드 스크립트
 docs/DEPLOY.md      폐쇄망 배포 가이드 (상세)
 docker-compose.yml  로컬 개발/검증용
+ocp-lab/            폐쇄망 OCP 실습 환경 (OCP 기본 + EX280 대비, bastion 반입 번들) — ocp-lab/README.md
 ```
 
 ## 빠른 시작 (로컬 개발)

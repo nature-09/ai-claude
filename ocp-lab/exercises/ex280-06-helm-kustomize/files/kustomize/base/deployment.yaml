@@ -1,0 +1,26 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kapp
+  labels:
+    app: kapp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kapp
+  template:
+    metadata:
+      labels:
+        app: kapp
+    spec:
+      containers:
+      - name: lab-app
+        image: lab-app            # overlay 의 images: 로 실제 레지스트리/태그가 정해짐
+        ports:
+        - containerPort: 8080
+        envFrom:
+        - configMapRef:
+            name: kapp-config     # configMapGenerator 가 해시 접미어를 붙여 이름을 바꿔 줌
+        readinessProbe:
+          httpGet: {path: /readyz, port: 8080}

@@ -1,0 +1,93 @@
+# 1) 이미지 태그 오타 → ImagePullBackOff
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: app-image, labels: {app: app-image}}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: app-image}}
+  template:
+    metadata: {labels: {app: app-image}}
+    spec:
+      containers:
+      - name: lab-app
+        image: "@@IMG_APP@@:v1.0"
+        ports: [{containerPort: 8080}]
+---
+# 2) 서비스 targetPort 오류 → 라우트 503
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: app-svc, labels: {app: app-svc}}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: app-svc}}
+  template:
+    metadata: {labels: {app: app-svc}}
+    spec:
+      containers:
+      - name: lab-app
+        image: "@@IMG_APP@@:v1"
+        ports: [{containerPort: 8080}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: app-svc}
+spec:
+  selector: {app: app-svc}
+  ports: [{name: http, port: 8080, targetPort: 8081}]
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata: {name: app-svc}
+spec:
+  to: {kind: Service, name: app-svc}
+  port: {targetPort: http}
+---
+# 3) 없는 Secret 참조 → CreateContainerConfigError
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: app-config, labels: {app: app-config}}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: app-config}}
+  template:
+    metadata: {labels: {app: app-config}}
+    spec:
+      containers:
+      - name: lab-app
+        image: "@@IMG_APP@@:v1"
+        env:
+        - name: DB_PASSWORD
+          valueFrom: {secretKeyRef: {name: app-db-secret, key: password}}
+---
+# 4) readiness 경로 오류 → 0/1 Ready
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: app-probe, labels: {app: app-probe}}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: app-probe}}
+  template:
+    metadata: {labels: {app: app-probe}}
+    spec:
+      containers:
+      - name: lab-app
+        image: "@@IMG_APP@@:v1"
+        readinessProbe:
+          httpGet: {path: /ready, port: 8080}
+          periodSeconds: 5
+---
+# 5) 과도한 리소스 요청 → Pending (FailedScheduling)
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: app-sched, labels: {app: app-sched}}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: app-sched}}
+  template:
+    metadata: {labels: {app: app-sched}}
+    spec:
+      containers:
+      - name: lab-app
+        image: "@@IMG_APP@@:v1"
+        resources:
+          requests: {cpu: "64", memory: 64Mi}

@@ -1,0 +1,183 @@
+#!/usr/bin/env bash
+# OCP 실습 도우미
+#   lab list | guide | start | grade | finish | solve | status | init | login | env | version
+set -uo pipefail
+
+LAB_HOME="${LAB_HOME:-$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)}"
+export LAB_HOME
+# shellcheck source=../lib/common.sh
+. "$LAB_HOME/lib/common.sh"
+
+usage() {
+  cat <<EOF
+${C_BLD}OCP 실습 도구 (ocp-lab $LAB_VERSION)${C_OFF}
+
+사용법: lab <명령> [실습ID]
+
+  init [이름]        수강생 이름 설정 (네임스페이스/사용자 접두어, 예: student01)
+  login [사용자]     OCP 로그인 (LAB_API_URL 사용)
+  list              실습 목록
+  guide <실습>       실습 가이드 보기
+  start <실습>       실습 환경 준비 (네임스페이스, 초기 리소스, 작업 파일)
+  grade <실습>       채점
+  finish <실습>      실습 정리 (네임스페이스/클러스터 설정 원복)
+  solve <실습>       모범 답안 적용 (강사 시연·자습 확인용)
+  status            내 실습 네임스페이스 현황
+  env               실습 변수 출력  →  eval "\$(lab env)"
+  version
+
+실습 ID는 앞부분만 써도 됩니다 (예: lab start ex280-05)
+EOF
+}
+
+# 실습 ID → 디렉터리 (정확히 일치 또는 유일한 접두어)
+resolve_ex() {
+  local want="$1" d matches=()
+  [ -n "$want" ] || die "실습 ID를 지정하세요 (lab list)"
+  if [ -d "$LAB_HOME/exercises/$want" ]; then echo "$want"; return; fi
+  for d in "$LAB_HOME"/exercises/"$want"*/; do [ -d "$d" ] && matches+=("$(basename "$d")"); done
+  [ ${#matches[@]} -eq 1 ] || die "실습 '$want' 을(를) 찾을 수 없거나 여러 개입니다: ${matches[*]:-없음} (lab list)"
+  echo "${matches[0]}"
+}
+
+load_ex() {
+  EX_ID="$(resolve_ex "${1:-}")" || exit 1
+  EX_DIR="$LAB_HOME/exercises/$EX_ID"
+  EX_TITLE="" EX_SCOPE=namespace EX_NAMESPACES=()
+  export EX_ID EX_DIR
+  # shellcheck source=/dev/null
+  . "$EX_DIR/lab.sh"
+}
+
+ex_title_of() { sed -n 's/^EX_TITLE="\(.*\)"$/\1/p' "$1/lab.sh" | head -1; }
+ex_scope_of() { sed -n 's/^EX_SCOPE=\([a-z]*\).*$/\1/p' "$1/lab.sh" | head -1; }
+
+cmd_list() {
+  local d id group=""
+  for d in "$LAB_HOME"/exercises/ocp-*/ "$LAB_HOME"/exercises/ex280-*/; do
+    [ -d "$d" ] || continue
+    id="$(basename "$d")"
+    case "$id" in
+      ocp-*)   [ "$group" = ocp ]   || { group=ocp;   echo; echo "${C_BLD}[OCP 기본 기능]${C_OFF}"; } ;;
+      ex280-*) [ "$group" = ex280 ] || { group=ex280; echo; echo "${C_BLD}[EX280 (RHCOA) 대비]${C_OFF}"; } ;;
+    esac
+    local mark=""
+    [ "$(ex_scope_of "$d")" = cluster ] && mark=" ${C_YEL}(클러스터 설정 포함)${C_OFF}"
+    printf '  %-28s %s%s\n' "$id" "$(ex_title_of "$d")" "$mark"
+  done
+  echo
+}
+
+cmd_guide() {
+  local id; id="$(resolve_ex "${1:-}")" || exit 1
+  local f="$LAB_HOME/exercises/$id/README.md"
+  U="$( (lab_resolve_user && echo "$U") 2>/dev/null || echo '<이름>')"
+  # 가이드 안의 \${LAB_USER} 표기는 그대로 두고, 상단에 현재 값만 알려줌
+  { echo "# (현재 LAB_USER=$U, 작업 디렉터리=$LAB_WORKDIR/$id)"; echo; cat "$f"; } |
+    if [ -t 1 ] && command -v less >/dev/null 2>&1; then less -R; else cat; fi
+}
+
+cmd_init() {
+  local name="${1:-}"
+  if [ -z "$name" ]; then
+    name="$(oc whoami 2>/dev/null || true)"
+    valid_user "$name" || die "이름을 지정하세요: lab init <이름>  (예: lab init student01)"
+  fi
+  valid_user "$name" || die "'$name' 형식 오류: 소문자/숫자/하이픈, 2~20자"
+  mkdir -p "$HOME/.ocp-lab" && echo "$name" > "$HOME/.ocp-lab/user"
+  info "수강생 이름: $name  (네임스페이스는 $name-<실습> 형식으로 만들어집니다)"
+  info "셸에서 변수를 쓰려면:  eval \"\$(lab env)\""
+}
+
+cmd_login() {
+  local user="${1:-}"
+  if [ -z "$user" ]; then lab_resolve_user; user="$U"; fi
+  [ -n "${LAB_API_URL:-}" ] || die "LAB_API_URL 이 설정되지 않았습니다. oc login <API URL> -u $user 로 직접 로그인하세요"
+  local -a opts=()
+  [ "$LAB_INSECURE_TLS" = true ] && opts+=(--insecure-skip-tls-verify=true)
+  [ -n "${LAB_API_CA:-}" ] && opts=(--certificate-authority="$LAB_API_CA")
+  oc login "$LAB_API_URL" -u "$user" "${opts[@]}"
+}
+
+cmd_env() {
+  lab_resolve_user
+  cat <<EOF
+export LAB_USER="$U"
+export LAB_REGISTRY="${LAB_REGISTRY:-}"
+export LAB_WORKDIR="$LAB_WORKDIR"
+export IMG_APP="$IMG_APP"
+export IMG_TOOLBOX="$IMG_TOOLBOX"
+export IMG_UBI="$IMG_UBI"
+export IMG_HTTPD="$IMG_HTTPD"
+export IMG_MYSQL="$IMG_MYSQL"
+EOF
+  if oc whoami >/dev/null 2>&1; then echo "export APPS_DOMAIN=\"$(apps_domain)\""; fi
+}
+
+cmd_status() {
+  lab_resolve_user; require_oc
+  echo "수강생: $U   로그인: $(oc whoami)   API: $(api_url)"
+  echo
+  oc get namespaces -l "ocp-lab/student=$U" -L ocp-lab/exercise 2>/dev/null || true
+  echo
+  echo "최근 채점 결과:"
+  grep " $U " "$HOME/.ocp-lab/results.log" 2>/dev/null | tail -10 || echo "  (없음)"
+}
+
+confirm_cluster_scope() {
+  if [ "$EX_SCOPE" = cluster ] && is_shared && [ -z "${LAB_YES:-}" ] && [ -t 0 ]; then
+    warn "이 실습은 클러스터 전체 설정(OAuth 등)을 수정합니다. 다른 수강생에게 영향이 없도록 '$U-' 접두어를 꼭 지키세요."
+  fi
+}
+
+run_phase() { # start|grade|finish|solve
+  local phase="$1"
+  lab_resolve_user
+  require_oc
+  load_ex "${2:-}"
+  case "$phase" in
+    start)
+      require_registry
+      title "$EX_ID 시작 — $EX_TITLE"
+      confirm_cluster_scope
+      ex_start
+      echo
+      info "준비 완료. 가이드:  lab guide $EX_ID   채점:  lab grade $EX_ID"
+      ;;
+    grade)
+      title "$EX_ID 채점 — $EX_TITLE (수강생: $U)"
+      ex_grade
+      grade_summary
+      ;;
+    finish)
+      title "$EX_ID 정리"
+      if declare -F ex_finish >/dev/null; then ex_finish; else ns_del "${EX_NAMESPACES[@]}"; fi
+      info "정리 완료"
+      ;;
+    solve)
+      declare -F ex_solve >/dev/null || die "이 실습에는 모범 답안 스크립트가 없습니다"
+      if [ -z "${LAB_YES:-}" ] && [ -t 0 ]; then
+        read -r -p "모범 답안을 적용합니다. 직접 풀어보지 않았다면 취소하세요. 계속할까요? [y/N] " a
+        [[ "$a" =~ ^[yY] ]] || exit 0
+      fi
+      require_registry
+      title "$EX_ID 모범 답안 적용"
+      ex_solve
+      info "적용 완료. 'lab grade $EX_ID' 로 확인하세요"
+      ;;
+  esac
+}
+
+cmd="${1:-help}"; shift || true
+case "$cmd" in
+  list|ls)          cmd_list ;;
+  guide|g)          cmd_guide "${1:-}" ;;
+  init)             cmd_init "${1:-}" ;;
+  login)            cmd_login "${1:-}" ;;
+  env)              cmd_env ;;
+  status)           cmd_status ;;
+  start|grade|finish|solve) run_phase "$cmd" "${1:-}" ;;
+  version|-v|--version) echo "ocp-lab $LAB_VERSION" ;;
+  help|-h|--help)   usage ;;
+  *)                usage; exit 1 ;;
+esac

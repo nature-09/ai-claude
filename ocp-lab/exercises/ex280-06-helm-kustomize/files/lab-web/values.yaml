@@ -1,0 +1,22 @@
+replicaCount: 1
+
+image:
+  repository: "@@IMG_APP@@"
+  tag: v1
+  pullPolicy: IfNotPresent
+
+message: "Hello from Helm"
+
+service:
+  port: 8080
+
+route:
+  enabled: true
+  host: ""          # 비우면 자동 생성
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 32Mi
+  limits:
+    memory: 128Mi

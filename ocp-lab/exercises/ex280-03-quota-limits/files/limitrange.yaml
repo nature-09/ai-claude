@@ -1,0 +1,17 @@
+# TODO: 아래 값을 과제 조건에 맞게 채우고 oc apply -f limitrange.yaml -n @@LAB_USER@@-quota
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: default-limits
+spec:
+  limits:
+  - type: Container
+    default:            # limits 를 지정하지 않은 컨테이너에 적용될 limits
+      cpu: ""
+      memory: ""
+    defaultRequest:     # requests 를 지정하지 않은 컨테이너에 적용될 requests
+      cpu: ""
+      memory: ""
+    max:
+      cpu: ""
+      memory: ""
